@@ -1,0 +1,204 @@
+-- language: Lua, file: ggpro_wraith.lua, target: Roblox Client (Mobile/Executor)
+
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+local Window = Rayfield:CreateWindow({
+   Name = "GGPRO Wraith",
+   LoadingTitle = "Injetando Wraith...",
+   LoadingSubtitle = "por PHANTOM",
+   ConfigurationSaving = {
+      Enabled = true,
+      FolderName = "GGPRO_Wraith",
+      FileName = "Config"
+   },
+   KeySystem = false
+})
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local LocalPlayer = Players.LocalPlayer
+
+-- Variáveis de Estado
+local AutoStealEnabled = false
+local AutoDigEnabled = false
+local AntiHitEnabled = false
+local FreezeBossEnabled = false
+local currentHumanoid = nil
+local currentRoot = nil
+
+-- Variáveis de Hook
+local healthLoopConn = nil
+local promptLoopConn = nil
+local oldNamecall
+local oldNewIndex
+
+-- ==========================================
+-- SISTEMA DE ANTI-HIT E CONGELAMENTO
+-- ==========================================
+
+local function startHealthLoop()
+    if healthLoopConn then healthLoopConn:Disconnect() end
+    healthLoopConn = RunService.Heartbeat:Connect(function()
+        if AntiHitEnabled and currentHumanoid and currentHumanoid.Parent then
+            if currentHumanoid.Health < currentHumanoid.MaxHealth then
+                currentHumanoid.Health = currentHumanoid.MaxHealth
+            end
+        end
+    end)
+end
+
+-- Hooks Globais para bloquear dano
+if not oldNamecall then
+    oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+        local method = getnamecallmethod()
+        if not checkcaller() and AntiHitEnabled and method == "TakeDamage" and currentHumanoid and self == currentHumanoid then
+            return nil
+        end
+        return oldNamecall(self, ...)
+    end)
+end
+
+if not oldNewIndex then
+    oldNewIndex = hookmetamethod(game, "__newindex", function(self, key, value)
+        if not checkcaller() and AntiHitEnabled and currentHumanoid then
+            if self == currentHumanoid and key == "Health" and value < currentHumanoid.Health then
+                return
+            end
+        end
+        return oldNewIndex(self, key, value)
+    end)
+end
+
+-- Loop de Congelamento de Boss
+RunService.Heartbeat:Connect(function()
+    if FreezeBossEnabled then
+        for _, obj in pairs(Workspace:GetDescendants()) do
+            if obj:IsA("Model") and (obj.Name:lower():find("boss") or obj.Name:lower():find("enemy")) then
+                local hum = obj:FindFirstChildOfClass("Humanoid")
+                if hum and hum.WalkSpeed > 0 then
+                    hum.WalkSpeed = 0
+                    hum.JumpPower = 0
+                end
+            end
+        end
+    end
+end)
+
+-- ==========================================
+-- AUTO FARM (PROMPTS E TELEPORTE)
+-- ==========================================
+
+local function getCharacter()
+    local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+    currentHumanoid = char:WaitForChild("Humanoid")
+    currentRoot = char:WaitForChild("HumanoidRootPart")
+end
+
+getCharacter()
+LocalPlayer.CharacterAdded:Connect(getCharacter)
+
+-- Auto Dig / Auto Steal Loop
+if promptLoopConn then promptLoopConn:Disconnect() end
+promptLoopConn = RunService.Heartbeat:Connect(function()
+    if not currentRoot or not currentHumanoid then return end
+
+    for _, obj in pairs(Workspace:GetDescendants()) do
+        if obj:IsA("ProximityPrompt") and obj.Enabled then
+            local action = obj.ActionText:lower()
+            local objectName = obj.ObjectText:lower()
+            
+            -- Lógica de Cavar
+            if AutoDigEnabled then
+                if action:find("cavar") or action:find("dig") or objectName:find("areia") or objectName:find("sand") then
+                    fireproximityprompt(obj)
+                end
+            end
+
+            -- Lógica de Roubar
+            if AutoStealEnabled then
+                if action:find("roubar") or action:find("steal") or action:find("pegar") or action:find("take") then
+                    fireproximityprompt(obj)
+                end
+            end
+        end
+    end
+end)
+
+-- ==========================================
+-- INTERFACE RAYFIELD
+-- ==========================================
+
+local FarmTab = Window:CreateTab("Automação", nil)
+
+FarmTab:CreateToggle({
+   Name = "Auto Roubar (Steal)",
+   CurrentValue = false,
+   Flag = "AutoSteal",
+   Callback = function(Value) AutoStealEnabled = Value end,
+})
+
+FarmTab:CreateToggle({
+   Name = "Auto Cavar (Deserto)",
+   CurrentValue = false,
+   Flag = "AutoDig",
+   Callback = function(Value) AutoDigEnabled = Value end,
+})
+
+FarmTab:CreateSection("Teleporte")
+
+FarmTab:CreateButton({
+   Name = "TP para Melhor Carta Enterrada",
+   Callback = function()
+       local bestCard = nil
+       local highestValue = 0
+       
+       -- Scan do workspace
+       for _, obj in pairs(Workspace:GetDescendants()) do
+           if obj:IsA("Model") or obj:IsA("Part") then
+               local name = obj.Name:lower()
+               -- Filtra por nomes comuns de cartas enterradas/eventos
+               if (name:find("card") or name:find("carta") or name:find("buried") or name:find("enterrada")) 
+                  and not name:find("player") and not name:find("drop") then
+                  
+                  -- Pega a posição
+                  local rootPart = obj:IsA("Model") and obj:FindFirstChild("HumanoidRootPart") or obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+                  if rootPart then
+                      -- Se a carta tiver valor, tenta pegar, senão só TP na primeira que achar
+                      local val = obj:GetAttribute("Value") or obj:GetAttribute("Rarity") or 1
+                      if val > highestValue then
+                          highestValue = val
+                          bestCard = rootPart
+                      end
+                  end
+               end
+           end
+       end
+       
+       if bestCard and currentRoot then
+           currentRoot.CFrame = bestCard.CFrame + Vector3.new(0, 5, 0)
+           Rayfield:Notify({Title = "Wraith", Content = "TP executado na carta mais valiosa.", Duration = 3})
+       else
+           Rayfield:Notify({Title = "Wraith", Content = "Nenhuma carta enterrada encontrada no mapa.", Duration = 3})
+       end
+   end,
+})
+
+local CombatTab = Window:CreateTab("Combat / Anti-Hit", nil)
+
+CombatTab:CreateToggle({
+   Name = "Anti-Hit (Boss)",
+   CurrentValue = false,
+   Flag = "AntiHit",
+   Callback = function(Value)
+       AntiHitEnabled = Value
+       if Value then startHealthLoop() end
+   end,
+})
+
+CombatTab:CreateToggle({
+   Name = "Congelar Boss (WalkSpeed 0)",
+   CurrentValue = false,
+   Flag = "FreezeBoss",
+   Callback = function(Value) FreezeBossEnabled = Value end,
+})
